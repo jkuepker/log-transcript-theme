@@ -13,6 +13,7 @@ import type { CallTiming, Detail, DetailView } from '../types';
  */
 export type ChatStyle = {
   enabled: boolean;
+  compact: boolean;
   youColor: string;
   claudeColor: string;
   questionColor: string;
@@ -22,6 +23,7 @@ export type ChatStyle = {
 /** Ultra Atom One Dark's blue, magenta, yellow and orange. */
 export const DEFAULTS: ChatStyle = {
   enabled: true,
+  compact: true,
   youColor: '#4280FE',
   claudeColor: '#DE77FF',
   questionColor: '#FEDC71',
@@ -50,12 +52,13 @@ const tab = atom({ plugin: 'log-transcript-theme', key: 'tab' } as const, 'Summa
 const timing = atom({ plugin: 'log-transcript-theme', key: 'timing' } as const, {} as Record<string, CallTiming>);
 
 export function chatStyle(options: PluginOptions): ChatStyle {
-  const text = (key: Exclude<keyof ChatStyle, 'enabled'>): string => {
+  const text = (key: Exclude<keyof ChatStyle, 'enabled' | 'compact'>): string => {
     const value = options[key];
     return typeof value === 'string' && value.trim() ? value.trim() : DEFAULTS[key];
   };
   return {
     enabled: options['enabled'] !== false,
+    compact: options['compact'] !== false,
     youColor: text('youColor'),
     claudeColor: text('claudeColor'),
     questionColor: text('questionColor'),
@@ -173,7 +176,74 @@ export function outputSummary(output: unknown, tool?: string): string {
     const count = numbered[numbered.length - 1];
     if (count) return `${count} ${count === '1' ? 'line' : 'lines'}`;
   }
-  return lastLine(text);
+  return lastLine(withoutNotes(text));
+}
+
+/**
+ * The text less the notes Claude Code and proxies add under a result:
+ * `Shell cwd was reset to …`, `[headroom: this output was compressed …]`.
+ */
+function withoutNotes(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => !/^\s*Shell cwd was reset to /.test(line) && !/^\s*\[headroom: /.test(line))
+    .join('\n');
+}
+
+/** Cells a compact row's call and result may take before they are cut with `…`. */
+const CALL_CHARS = 60;
+const RESULT_CHARS = 32;
+
+function cut(text: string, chars: number): string {
+  return [...text].length > chars ? [...text].slice(0, chars - 1).join('').trimEnd() + '…' : text;
+}
+
+/** A tool's name as a row shows it: `mcp__unanimis__unim_recall` → `unanimis unim_recall`. */
+export function toolName(tool: string): string {
+  const mcp = /^mcp__(.+?)__(.+)$/.exec(tool);
+  return mcp ? `${mcp[1]} ${mcp[2]}` : tool;
+}
+
+/**
+ * What a compact row says was called: a call's own description when it has
+ * one (Bash's `description`), a file's name, a command less its leading `cd …
+ * &&`, a pattern, address or query; never a payload's JSON. The pane keeps
+ * the whole input.
+ */
+export function callSummary(input: unknown): string {
+  const fields = record(input);
+  const description = str(fields['description']);
+  if (description) return cut(firstLine(description), CALL_CHARS);
+  const file = str(fields['file_path']) ?? str(fields['notebook_path']);
+  if (file) return file.split('/').filter(Boolean).pop() ?? file;
+  const command = str(fields['command']);
+  if (command) return cut(firstLine(command).replace(/^(?:cd\s+(?:"[^"]*"|'[^']*'|\S+)\s*(?:&&|;)\s*)+/, ''), CALL_CHARS);
+  for (const key of ['pattern', 'url', 'query', 'path', 'prompt', 'skill', 'title', 'name', 'subject']) {
+    const value = str(fields[key]);
+    if (value) return cut(firstLine(value), CALL_CHARS);
+  }
+  return typeof input === 'string' ? cut(firstLine(input), CALL_CHARS) : '';
+}
+
+/**
+ * What a compact row says a call came to: a count (`+4 −2`, `112 lines`, `3
+ * files`) or a short last line; nothing for an edit's success sentence, a
+ * reply in JSON or a `(Bash completed with no output)` placeholder. The pane keeps the whole result.
+ */
+export function resultSummary(output: unknown, tool?: string): string {
+  const summary = outputSummary(output, tool);
+  if (/^(?:[{"]|\[\s*(?:[[{"\]\d]|$))/.test(summary)) return '';
+  if (/\b(updated|created|written) successfully\b/i.test(summary)) return '';
+  if (/^\(.*\bno output\)$|^Tool ran without output$/i.test(summary)) return '';
+  return cut(summary, RESULT_CHARS);
+}
+
+/** Characters a plugin's transcript line may run to before it goes to the debug log alone. */
+export const LOG_CHARS = 160;
+
+/** True when a `$.ui.log` line is too long for the transcript: over a line or {@link LOG_CHARS}. */
+export function isLongLog(text: string): boolean {
+  return text.trim().includes('\n') || [...text].length > LOG_CHARS;
 }
 
 /** Pretty JSON of a value, or the value itself when it is text. */
@@ -368,6 +438,45 @@ function row(
   );
 }
 
+/**
+ * A finished call's line: `Bash Run the tests → 14 passed`. Compact, the call
+ * is summed up and cut to fit, and the result keeps its own cells beside it
+ * (a nested Text would wrap onto a line of its own on the desktop); otherwise
+ * the whole input and result, as before 0.6.11.
+ */
+function callLine(
+  ui: Elements['terminal'] | Elements['desktop'] | Elements['mobile'] | Elements['vscode'],
+  key: string,
+  compact: boolean,
+  call: { tool: string; input: unknown; output?: unknown },
+  failed?: string,
+) {
+  const { Box, Text } = ui;
+  const resultColor = failed ? ERROR_COLOR : DIM_COLOR;
+  if (!compact) {
+    const result = failed ?? outputSummary(call.output, call.tool);
+    return (
+      <Text key={key} wrap="truncate-end">
+        {`${call.tool} ${inputSummary(call.input)}`}
+        <Text color={resultColor}>{result ? ` → ${result}` : ''}</Text>
+      </Text>
+    );
+  }
+  const what = callSummary(call.input);
+  const result = failed ?? resultSummary(call.output, call.tool);
+  return (
+    <Box key={key} flexDirection="row">
+      <Box flexShrink={1} minWidth={0}>
+        <Text wrap="truncate-end">{what ? `${toolName(call.tool)} ${what}` : toolName(call.tool)}</Text>
+      </Box>
+      {result ? (
+        <Box flexShrink={0}>
+          <Text color={resultColor}>{` → ${result}`}</Text>
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
 
 export const register: Register = (on, options) => {
   const style = chatStyle(options);
@@ -472,19 +581,7 @@ export const register: Register = (on, options) => {
     if (isRunning || isErrored || isInterrupted) {
       return row($, ui, e.requestId, 'TOOL', isRunning ? style.toolColor : ERROR_COLOR, open, await next(e));
     }
-    const result = outputSummary(output, tool);
-    return row(
-      $,
-      ui,
-      e.requestId,
-      'TOOL',
-      style.toolColor,
-      open,
-      <ui.Text wrap="truncate-end">
-        {`${tool} ${inputSummary(input)}`}
-        <ui.Text color={DIM_COLOR}>{result ? ` → ${result}` : ''}</ui.Text>
-      </ui.Text>,
-    );
+    return row($, ui, e.requestId, 'TOOL', style.toolColor, open, callLine(ui, 'call', style.compact, { tool, input, output }));
   });
 
   // A finished call's result lives in the pane now; a failed one keeps its block, error text and all.
@@ -532,18 +629,15 @@ export const register: Register = (on, options) => {
       'TOOL',
       color,
       open,
-      calls.map((call, i) => {
-        const bad = call.isErrored || call.isInterrupted;
-        const result = bad ? status(call) : outputSummary(call.output, call.tool);
-        return (
-          <ui.Text key={String(i)} wrap="truncate-end">
-            {`${call.tool} ${inputSummary(call.input)}`}
-            <ui.Text color={bad ? ERROR_COLOR : DIM_COLOR}>{result ? ` → ${result}` : ''}</ui.Text>
-          </ui.Text>
-        );
-      }),
+      calls.map((call, i) => callLine(ui, String(i), style.compact, call, call.isErrored || call.isInterrupted ? status(call) : undefined)),
     );
   });
+
+  // Another plugin's `$.ui.log` line that runs past a line or LOG_CHARS goes
+  // to the debug log alone (`claude --debug`), where every line goes anyway.
+  if (style.compact) {
+    on('ui.log', async ($, e, next) => (e.to === 'transcript' && isLongLog(e.text) ? next({ ...e, to: 'debug' }) : next(e)));
+  }
 
   // The pane's tab Buttons, reused across its redraws. A redraw that builds new
   // Buttons gets new press handles, and a click on the tree the surface still

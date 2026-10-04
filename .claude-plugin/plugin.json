@@ -1,13 +1,19 @@
 {
   "name": "log-transcript-theme",
-  "version": "0.6.10",
-  "description": "A log look for the transcript: YOU, CLAUDE and TOOL labels on every row, tool calls folded to one line, and a details › button beside each label that opens the row's details in a docked pane.",
+  "version": "0.6.11",
+  "description": "A log look for the transcript: YOU, CLAUDE and TOOL labels on every row, tool calls summed up in one short line, and a details › button beside each label that opens the row's details in a docked pane.",
   "license": "MIT",
   "userConfig": {
     "enabled": {
       "type": "boolean",
       "title": "Enabled",
       "description": "Draw the transcript in this style. Off leaves Claude Code's own drawing.",
+      "default": true
+    },
+    "compact": {
+      "type": "boolean",
+      "title": "Compact",
+      "description": "Sum each tool call up in a few words and keep long plugin log lines off the transcript (they stay in the debug log). Off shows the whole input and result.",
       "default": true
     },
     "youColor": {

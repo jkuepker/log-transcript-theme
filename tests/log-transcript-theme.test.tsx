@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing';
 
-import { attachmentLabel, attachmentsSummary, chatStyle, DEFAULTS, duration, firstLine, formatName, holdsEngine, inputSummary, lastLine, isQuestion, promptParts, outputSummary, outputText, PANE, questionText, textDetail, toolDetail } from '../hooks/log-transcript-theme.tsx';
+import { attachmentLabel, attachmentsSummary, callSummary, chatStyle, DEFAULTS, duration, firstLine, formatName, holdsEngine, inputSummary, isLongLog, lastLine, LOG_CHARS, resultSummary, toolName, isQuestion, promptParts, outputSummary, outputText, PANE, questionText, textDetail, toolDetail } from '../hooks/log-transcript-theme.tsx';
 
 type Node = { type?: string; props?: Record<string, unknown>; children?: unknown[] };
 
@@ -30,12 +30,9 @@ function texts(tree: unknown): { text: string; color: unknown; backgroundColor: 
     .map((element) => ({ text: textOf(element), color: element.props?.['color'], backgroundColor: element.props?.['backgroundColor'] }));
 }
 
-/** All the text a Text element draws, nested Texts included. */
-function allText(element: Node): string {
-  const children = element.children ?? element.props?.['children'];
-  return (Array.isArray(children) ? children : [children])
-    .map((child) => (typeof child === 'string' ? child : child && typeof child === 'object' ? allText(child as Node) : ''))
-    .join('');
+/** Every string a tree draws, run together: a row's call and result read as one line. */
+function drawn(tree: unknown): string {
+  return texts(tree).map((t) => t.text).join('');
 }
 
 const viewport = { columns: 100, rows: 40 };
@@ -106,6 +103,40 @@ describe('helpers', () => {
     expect(outputSummary('1\t# Title\n2\t\n179\t', 'Read')).toBe('179 lines');
   });
 
+  test('outputSummary passes over the notes under a result', () => {
+    expect(outputSummary({ stdout: '3 passed\n\nShell cwd was reset to /opt/code/x\n' })).toBe('3 passed');
+    expect(outputSummary('2.1.289 (Claude Code)\n\n[headroom: this output was compressed 2003->1350 tokens (33% saved).]')).toBe('2.1.289 (Claude Code)');
+  });
+
+  test('callSummary says what was called in a few words, never JSON', () => {
+    expect(callSummary({ command: 'git status --short', description: 'Show working tree status' })).toBe('Show working tree status');
+    expect(callSummary({ command: 'cd /opt/code/fleetq && cd src && fleetq status' })).toBe('fleetq status');
+    expect(callSummary({ command: 'x'.repeat(200) })).toHaveLength(60);
+    expect(callSummary({ file_path: '/opt/code/fleetq/deploy/fleet.toml', old_string: 'a' })).toBe('fleet.toml');
+    expect(callSummary({ request_id: 'r1', title: 'fleetq roster' })).toBe('fleetq roster');
+    expect(callSummary({ foo: 1 })).toBe('');
+    expect(toolName('mcp__unanimis__unim_capture_new')).toBe('unanimis unim_capture_new');
+    expect(toolName('Bash')).toBe('Bash');
+  });
+
+  test('resultSummary keeps counts and short lines, drops JSON and success sentences', () => {
+    expect(resultSummary({ structuredPatch: [{ lines: ['+a', '-b'] }] })).toBe('+1 −1');
+    expect(resultSummary('The file /a/fleet.toml has been updated successfully.', 'Edit')).toBe('');
+    expect(resultSummary('File created successfully at: /a/new.ts', 'Write')).toBe('');
+    expect(resultSummary({ stdout: 'Shell cwd was reset to /x' })).toBe('');
+    expect(resultSummary({ stdout: 'built\n[WARN: 3 deprecations]' })).toBe('[WARN: 3 deprecations]');
+    expect(resultSummary('{"record_id":"85fe","status":"accepted"}')).toBe('');
+    expect(resultSummary('[{"id":1}]')).toBe('');
+    expect(resultSummary('(Bash completed with no output)', 'Bash')).toBe('');
+    expect([...resultSummary({ stdout: 'y'.repeat(100) })]).toHaveLength(32);
+  });
+
+  test('a plugin log line is long past one line or LOG_CHARS', () => {
+    expect(isLongLog('backend: size-recency')).toBe(false);
+    expect(isLongLog('d'.repeat(LOG_CHARS + 1))).toBe(true);
+    expect(isLongLog('one\ntwo')).toBe(true);
+  });
+
   test('outputText reads shell output, file content or a plain string', () => {
     expect(outputText('hi')).toBe('hi');
     expect(outputText({ stdout: 'out', stderr: 'err' })).toBe('out\nerr');
@@ -118,6 +149,8 @@ describe('helpers', () => {
     expect(chatStyle({})).toEqual(DEFAULTS);
     expect(chatStyle({ youColor: ' red ', claudeColor: '   ', toolColor: 5 })).toMatchObject({ youColor: 'red', claudeColor: DEFAULTS.claudeColor, toolColor: DEFAULTS.toolColor });
     expect(chatStyle({ enabled: false }).enabled).toBe(false);
+    expect(chatStyle({}).compact).toBe(true);
+    expect(chatStyle({ compact: false }).compact).toBe(false);
   });
 
   test('attachment labels name the kind and place, then the file name or, for a paste, the format', () => {
@@ -229,13 +262,20 @@ for (const surface of ['terminal', 'desktop'] as const) {
       const tree = await $.ui.render({ surface, component: 'ToolUse', requestId: 't1', viewport, props: toolProps() });
       const all = texts(tree);
       expect(all[0]).toMatchObject({ text: 'TOOL', color: DEFAULTS.toolColor });
-      const lines = walk(tree).filter((element) => element.type === 'Text').map(allText);
-      expect(lines).toContain('Bash npm test → 14 passed');
+      expect(drawn(tree)).toContain('Bash npm test → 14 passed');
       expect(walk(tree).some((element) => element.props?.['position'] === 'absolute')).toBe(false);
       // The pointer underlines the label and paints no background, which would hide a selection.
       const hovers = walk(tree).map((element) => ((element as { hover?: unknown }).hover ?? element.props?.['hover']) as { backgroundColor?: string; underline?: boolean } | undefined);
       expect(hovers.some((hover) => hover?.backgroundColor)).toBe(false);
       expect(hovers.some((hover) => hover?.underline === true)).toBe(true);
+    });
+
+    test('sum up what was called, and leave the whole input to the pane', async ($) => {
+      const input = { command: 'cd /opt/code/fleetq && deploy/install.sh 2>&1 | tail -5', description: 'Deploy fleetq' };
+      const tree = await $.ui.render({ surface, component: 'ToolUse', requestId: 't5', viewport, props: toolProps({ input, output: { stdout: 'ok\nShell cwd was reset to /x' } }) });
+      expect(drawn(tree)).toBe('TOOLBash Deploy fleetq → ok');
+      const mcp = await $.ui.render({ surface, component: 'ToolUse', requestId: 't6', viewport, props: toolProps({ tool: 'mcp__unanimis__unim_capture_new', input: { title: 'roster' }, output: '{"status":"accepted"}' }) });
+      expect(drawn(mcp)).toBe('TOOLunanimis unim_capture_new roster');
     });
 
     test('keep the engine\'s row under the label while running', async ($, on) => {
@@ -261,12 +301,11 @@ for (const surface of ['terminal', 'desktop'] as const) {
       on('ui.render', { component: 'ToolGroup' }, () => ({ type: 'engine', ref: 0 }));
       const props = group([call(), call({ input: { command: 'git log --oneline -3' }, output: { stdout: 'abc first\n' } })]);
       const tree = await $.ui.render({ surface, component: 'ToolGroup', requestId: 'g1', viewport, props: props as never });
-      const lines = walk(tree).filter((element) => element.type === 'Text').map(allText);
-      expect(lines).toContain('Bash ls → types');
-      expect(lines).toContain('Bash git log --oneline -3 → abc first');
+      expect(drawn(tree)).toContain('Bash ls → types');
+      expect(drawn(tree)).toContain('Bash git log --oneline -3 → abc first');
       const reads = group([call({ tool: 'Read', input: { file_path: '/r.md' }, output: '179' })]);
       const readTree = await $.ui.render({ surface, component: 'ToolGroup', requestId: 'g4', viewport, props: reads as never });
-      expect(walk(readTree).filter((element) => element.type === 'Text').map(allText)).toContain('Read /r.md → 179 lines');
+      expect(drawn(readTree)).toContain('Read r.md → 179 lines');
       expect(texts(tree)[0]).toMatchObject({ text: 'TOOL', color: DEFAULTS.toolColor });
       expect(walk(tree).filter((element) => element.type === 'engine')).toHaveLength(0);
     });
@@ -275,7 +314,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
       const props = group([call(), call({ input: { command: 'npm run tset' }, output: { stdout: '', stderr: 'Missing script' }, isErrored: true })]);
       const tree = await $.ui.render({ surface, component: 'ToolGroup', requestId: 'g2', viewport, props: props as never });
       expect(texts(tree)[0]?.color).toBe(ERROR_RED);
-      expect(walk(tree).filter((element) => element.type === 'Text').map(allText)).toContain('Bash npm run tset → failed');
+      expect(drawn(tree)).toContain('Bash npm run tset → failed');
+      expect(texts(tree).find((t) => t.text === ' → failed')?.color).toBe(ERROR_RED);
     });
 
     test('a live or expanded group is the engine\'s drawing alone: its calls carry their own TOOL', async ($, on) => {
@@ -433,6 +473,41 @@ for (const surface of ['terminal', 'desktop'] as const) {
     });
   });
 }
+
+describe('compact off', () => {
+  test('draws the whole input and result, as before', { options: { compact: false } }, async ($) => {
+    const input = { command: 'cd /a && npm test', description: 'Run tests' };
+    const tree = await $.ui.render({ surface: 'terminal', component: 'ToolUse', requestId: 'c1', viewport, props: toolProps({ input }) });
+    expect(drawn(tree)).toContain('Bash cd /a && npm test → 14 passed');
+  });
+});
+
+/** Another plugin that logs a short line and a long one on each tool call. */
+const chatty = {
+  name: 'chatty',
+  register(on: Parameters<import('claude-code').Register>[0]) {
+    on('tool.call', async ($, e, next) => {
+      $.ui.log('backend: size-recency');
+      $.ui.log(`decisions (1/7): ${'t1:Bash:keep '.repeat(40)}`);
+      return next(e);
+    });
+  },
+};
+
+describe('plugin log lines', () => {
+  for (const [compact, expected] of [[true, ['transcript', 'debug']], [false, ['transcript', 'transcript']]] as const) {
+    test(`compact ${compact}: a long one from another plugin ${compact ? 'goes to the debug log alone' : 'stays'}`, { plugins: [chatty], options: { compact } }, async ($, on) => {
+      const seen: string[] = [];
+      on('ui.log', (_$, e) => {
+        seen.push(e.to);
+        return undefined as never;
+      });
+      on('tool.call', () => ({ result: { stdout: 'ok' } }) as never);
+      await $.tool.call({ tool: 'Bash', command: 'echo hi', tool_use_id: 'l1' } as never);
+      expect(seen).toEqual([...expected]);
+    });
+  }
+});
 
 describe('tool timing', () => {
   test('a row drawn before its call finished still opens with the timing, read when details › is pressed', async ($, on) => {

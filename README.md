@@ -16,9 +16,9 @@ label opens that row's details in a pane docked beside the transcript.
 | Claude's reply | **CLAUDE** (magenta), then the markdown as usual |
 | Claude's question | **CLAUDE ?** (yellow): the reply's last paragraph outside code ends with `?` |
 | A multiple-choice question (AskUserQuestion) | **CLAUDE ?** over its answered card in the terminal, and a **CLAUDE ?** line above Claude Code's own dialog while it waits for you |
-| A finished tool call | **TOOL** (orange) and one line: `Bash npm test → 14 passed`, `Edit src/fetch.ts → +12 −3` |
+| A finished tool call | **TOOL** (orange) and one short line: what was called, in a few words, then what it came to: `Bash Run the tests → 14 passed`, `Edit fetch.ts → +12 −3`. A shell call shows its description, or its command less a leading `cd … &&`; a file call its file's name; an MCP call its server and tool (`unanimis unim_recall`), never its JSON. Result noise (`Shell cwd was reset to …`, an edit's success sentence, `(Bash completed with no output)`, a JSON reply) is left to the pane |
 | A running or failed tool call | **TOOL** (orange, red on failure) over Claude Code's own drawing |
-| A folded group (`Ran 2 shell commands`) | **TOOL** and one line per call, `→ failed` in red for a failed one; while it runs or under ctrl+o, Claude Code's own drawing, each call with its own **TOOL** |
+| A folded group (`Ran 2 shell commands`) | **TOOL** and one short line per call, as above, `→ failed` in red for a failed one; while it runs or under ctrl+o, Claude Code's own drawing, each call with its own **TOOL** |
 
 Click `details ›` beside any label to open the **Details** pane. A tool call has
 **Summary** (tool, status, input, result, duration), **Payload** (its input as
@@ -41,6 +41,10 @@ multiple-choice question, which it shows as its own receipt card without asking
 the plugin (a dismissed or timed-out question is a plain tool row and keeps its
 label). Code blocks in your prompts were checked by eye in the desktop app on
 2026-10-03 (0.6.10); in the terminal they are checked by tests only.
+The compact tool rows of 0.6.11 were checked by eye in the desktop app on
+2026-10-04; in the terminal they are checked by tests only, as is another
+plugin's long log line going to the debug log:
+that needs this plugin's `ui.log` hook to sit above the other plugin's call.
 
 It uses Claude Code's early-access function hooks (`ui.render`), which may
 change between Claude Code releases; `types/claude-code.d.ts` was written by
@@ -130,6 +134,7 @@ You need Claude Code 2.1.283 or later, in a terminal or the desktop app.
 | Option | Default | |
 |---|---|---|
 | `enabled` | `true` | off leaves Claude Code's own drawing |
+| `compact` | `true` | tool calls summed up in a few words, and another plugin's `$.ui.log` line that runs past one line or 160 characters kept in the debug log (`claude --debug`) only; off shows each call's whole input and result, and every log line |
 | `youColor` | `#4280FE` | the YOU label: a hex colour or a theme key |
 | `claudeColor` | `#DE77FF` | the CLAUDE label |
 | `questionColor` | `#FEDC71` | the CLAUDE ? label |
