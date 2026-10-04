@@ -41,10 +41,10 @@ multiple-choice question, which it shows as its own receipt card without asking
 the plugin (a dismissed or timed-out question is a plain tool row and keeps its
 label). Code blocks in your prompts were checked by eye in the desktop app on
 2026-10-03 (0.6.10); in the terminal they are checked by tests only.
-The compact tool rows of 0.6.11 were checked by eye in the desktop app on
-2026-10-04; in the terminal they are checked by tests only, as is another
-plugin's long log line going to the debug log:
-that needs this plugin's `ui.log` hook to sit above the other plugin's call.
+The compact tool rows of 0.6.11, and another plugin's long log lines kept off
+the transcript (fast-decmo-compaction's decisions on a 790-message compaction),
+were checked by eye in the desktop app on 2026-10-04; in the terminal they are
+checked by tests only.
 
 It uses Claude Code's early-access function hooks (`ui.render`), which may
 change between Claude Code releases; `types/claude-code.d.ts` was written by
